@@ -13,9 +13,21 @@
 
 module Main where
 
+import DsMonad
 import GHC
+import TcExpr
+import DsExpr
+import TcSimplify
+import TcHsSyn
+import Inst
+import RnExpr
+import TcRnDriver
+import TcOrigin
+import TcRnMonad
+import GhcMonad (withSession)
 import PrelNames
 import GHC.LanguageExtensions.Type
+-- import HscMain (hscParseExpr)
 import TcRnTypes
 import Data.Maybe (maybeToList)
 import TcEvidence
@@ -29,19 +41,21 @@ import TcBinds
 import GhcPlugins hiding ((<>))
 import Control.Monad (void)
 import GHC.Paths (libdir)
-
-
+import ErrUtils (Messages, pprErrMsgBagWithLoc)
+import qualified Outputable as O
 main :: IO ()
 main = do
   -- targetFile <- head <$> getArgs
   str <- runGhc (Just libdir) $ do
-    res    <- example -- targetFile
+    ((_,errmsgs) ,res)    <- example -- targetFile
     dflags <- getSessionDynFlags
-    return $ showSDoc dflags $ ppr res
+    let retDoc = case res of
+          Just _ -> ppr res
+          Nothing -> O.sep (pprErrMsgBagWithLoc errmsgs)
+    return $ showSDoc dflags retDoc
   putStrLn str
 
-example :: (GhcMonad m) => -- String ->
-  m Type
+example :: GhcMonad m => m (Messages, Maybe CoreExpr)
 example -- targetFile
   = do
   dflags <- getSessionDynFlags
@@ -53,25 +67,41 @@ example -- targetFile
                        , ghcMode   = CompManager
                        }
     `gopt_set` Opt_DeferTypedHoles
-  -- target <- guessTarget targetFile Nothing
-  -- setTargets [target]
-  -- void $ load LoadAllTargets
-  -- let modBName = mkModuleName "QQQ"
-  -- modSum <- getModSummary modBName
   setContext
     [ -- IIModule $ ms_mod_name modSum
     IIDecl (simpleImportDecl (moduleName pRELUDE))
     ]
-  -- (t, _) <- GHC.typeKind False "forall a. Thing a"
-  -- let (_, m) = splitForAllTys t
-  GHC.exprType TM_Inst "(==)"
-  -- let (clsTycon, tys) = tcSplitTyConApp m
-  -- let Just cls = tyConClass_maybe clsTycon
-  -- let computation = matchGlobalInst dflags' False cls tys
-  -- withSession $ \hsc_env -> liftIO $ do
-  --   (_, mb)<- runTcInteractive hsc_env computation
-  --   pure mb
+  expr <- parseExpr "(==>)"
+  (withSession $ \hsc_env -> do
+               liftIO $ runTcInteractive hsc_env (withWiredIn (elabRnExpr TM_Inst expr)))
 
+elabRnExpr
+  :: TcRnExprMode -> LHsExpr GhcPs -> TcRn CoreExpr
+elabRnExpr mode rdr_expr = do
+    (rn_expr, _fvs) <- rnLExpr rdr_expr
+    failIfErrsM
+    uniq <- newUnique
+    let fresh_it = itName uniq (getLoc rdr_expr)
+        orig     = lexprCtOrigin rn_expr
+    (tclvl, lie, (tc_expr, res_ty)) <- pushLevelAndCaptureConstraints $ do
+      (_tc_expr, expr_ty) <- tcInferSigma rn_expr
+      expr_ty'            <- if inst
+        then snd <$> deeplyInstantiate orig expr_ty
+        else return expr_ty
+      return (_tc_expr, expr_ty')
+    (_, _, evbs, residual, _) <- simplifyInfer tclvl
+                                            infer_mode
+                                            []    {- No sig vars -}
+                                            [(fresh_it, res_ty)]
+                                            lie
+    evbs' <- perhaps_disable_default_warnings $ simplifyInteractive residual
+    full_expr <- zonkTopLExpr (mkHsDictLet (EvBinds evbs') (mkHsDictLet evbs tc_expr))
+    initDsTc $ dsLExpr full_expr
+ where
+  (inst, infer_mode, perhaps_disable_default_warnings) = case mode of
+    TM_Inst    -> (True, NoRestrictions, id)
+    TM_NoInst  -> (False, NoRestrictions, id)
+    TM_Default -> (True, EagerDefaulting, unsetWOptM Opt_WarnTypeDefaults)
 
 
 
