@@ -13,6 +13,7 @@
 
 module Main where
 
+import Constraint
 import DsMonad
 import GHC
 import TcExpr
@@ -94,7 +95,7 @@ elabRnExpr mode rdr_expr = do
                                             []    {- No sig vars -}
                                             [(fresh_it, res_ty)]
                                             lie
-    evbs' <- perhaps_disable_default_warnings $ simplifyInteractive residual
+    evbs' <- perhaps_disable_default_warnings $ simplifyInteractive residual {wc_impl = emptyBag}
     full_expr <- zonkTopLExpr (mkHsDictLet (EvBinds evbs') (mkHsDictLet evbs tc_expr))
     initDsTc $ dsLExpr full_expr
  where
@@ -116,7 +117,8 @@ withWiredIn :: TcM a -> TcM a
 withWiredIn m = do
   undef <- lookupUndef
   wiredIns <- mkWiredIns
-  snd <$> tcValBinds NotTopLevel (binds undef wiredIns) (sigs wiredIns) m
+  -- snd <$> tcValBinds NotTopLevel (binds undef wiredIns) (sigs wiredIns) m
+  snd <$> tcValBinds NotTopLevel [] (sigs wiredIns) m
   
  where
   lookupUndef = do
