@@ -106,10 +106,10 @@ elabRnExpr mode rdr_expr = do
 
 
 
-data WiredIn = WiredIn {
-    wiredInName :: Name
-  , wiredInFixity :: Maybe (Int, FixityDirection)
-  , wiredInType :: HsType GhcRn
+data TcWiredIn = TcWiredIn {
+    tcWiredInName :: Name
+  , tcWiredInFixity :: Maybe (Int, FixityDirection)
+  , tcWiredInType :: HsType GhcRn
   }
 
 withWiredIn :: TcM a -> TcM a
@@ -120,32 +120,32 @@ withWiredIn m = do
   
  where
   lookupUndef = do
-    lookupOrig (Module (stringToUnitId "GHC.Err") (mkModuleName "GHC.Err")) (mkVarOcc "undefined")
+    lookupOrig gHC_ERR (mkVarOcc "undefined")
     -- tcLookupGlobal undefName
 
-  binds :: Name -> [WiredIn] -> [(RecFlag, LHsBinds GhcRn)]
-  binds undef wiredIns = map (\w -> 
+  binds :: Name -> [TcWiredIn] -> [(RecFlag, LHsBinds GhcRn)]
+  binds undef wiredIns = map (\w ->
       let ext = unitNameSet undef in -- $ varName $ tyThingId undef in
       let co_fn = idHsWrapper in
-      let matches = 
+      let matches =
             let ctxt = LambdaExpr in
             let grhss = GRHSs NoExtField [L locSpan (GRHS NoExtField [] (L locSpan (HsVar NoExtField (L locSpan undef))))] (L locSpan emptyLocalBinds) in
-            MG NoExtField (L locSpan [L locSpan (Match NoExtField ctxt [] grhss)]) Generated 
+            MG NoExtField (L locSpan [L locSpan (Match NoExtField ctxt [] grhss)]) Generated
       in
-      let b = FunBind ext (L locSpan $ wiredInName w) matches co_fn [] in
+      let b = FunBind ext (L locSpan $ tcWiredInName w) matches co_fn [] in
       (NonRecursive, unitBag (L locSpan b))
     ) wiredIns
 
   sigs wiredIns = concatMap (\w ->
-      let inf = maybeToList $ fmap (\(fPrec, fDir) -> L locSpan $ FixSig NoExtField $ FixitySig NoExtField [L locSpan (wiredInName w)] $ Fixity NoSourceText fPrec fDir) $ wiredInFixity w in
-      let t = 
+      let inf = maybeToList $ fmap (\(fPrec, fDir) -> L locSpan $ FixSig NoExtField $ FixitySig NoExtField [L locSpan (tcWiredInName w)] $ Fixity NoSourceText fPrec fDir) $ tcWiredInFixity w in
+      let t =
             let ext = [] in -- TODO: What goes here? XXX
-            [L locSpan $ TypeSig NoExtField [L locSpan (wiredInName w)] $ HsWC ext $ HsIB ext $ L locSpan $ wiredInType w]
+            [L locSpan $ TypeSig NoExtField [L locSpan (tcWiredInName w)] $ HsWC ext $ HsIB ext $ L locSpan $ tcWiredInType w]
       in
       inf <> t
     ) wiredIns
 
-  locSpan = UnhelpfulSpan "Language.Haskell.Liquid.GHC.Interface: WiredIn"
+  locSpan = UnhelpfulSpan "Language.Haskell.Liquid.Interface: WiredIn"
 
   mkWiredIns = sequence [impl, dimpl]
 
@@ -153,20 +153,18 @@ withWiredIn m = do
     u <- getUniqueM
     return $ mkInternalName u (mkVarOcc s) locSpan
 
-  boolTy = do
-    boolName <- lookupOrig (Module (stringToUnitId "Data.Bool") (mkModuleName "Data.Bool")) (mkVarOcc "Bool")
-    return $ L locSpan $ HsTyVar NoExtField NotPromoted $ L locSpan boolName
- 
+  boolTy = L locSpan $ HsTyVar NoExtField NotPromoted $ L locSpan boolTyConName
+    -- boolName <- lookupOrig (Module (stringToUnitId "Data.Bool") (mkModuleName "Data.Bool")) (mkVarOcc "Bool")
+    -- return $ L locSpan $ HsTyVar NoExtField NotPromoted $ L locSpan boolName
+
   -- infixr 1 ==> :: Bool -> Bool -> Bool
   impl = do
     n <- toName "==>"
-    b <- boolTy
-    let ty = HsFunTy NoExtField b (L locSpan $ HsFunTy NoExtField b b)
-    return $ WiredIn n (Just (1, InfixR)) ty
+    let ty = HsFunTy NoExtField boolTy (L locSpan $ HsFunTy NoExtField boolTy boolTy)
+    return $ TcWiredIn n (Just (1, InfixR)) ty
 
   -- infixr 1 <=> :: Bool -> Bool -> Bool
   dimpl = do
     n <- toName "<=>"
-    b <- boolTy
-    let ty = HsFunTy NoExtField b (L locSpan $ HsFunTy NoExtField b b)
-    return $ WiredIn n (Just (1, InfixR)) ty
+    let ty = HsFunTy NoExtField boolTy (L locSpan $ HsFunTy NoExtField boolTy boolTy)
+    return $ TcWiredIn n (Just (1, InfixR)) ty
