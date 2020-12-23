@@ -114,7 +114,7 @@ data TcWiredIn = TcWiredIn {
   }
 
 withWiredIn :: TcM a -> TcM a
-withWiredIn m = do
+withWiredIn m = discardConstraints $ do
   undef <- lookupUndef
   wiredIns <- mkWiredIns
   -- snd <$> tcValBinds NotTopLevel (binds undef wiredIns) (sigs wiredIns) m
